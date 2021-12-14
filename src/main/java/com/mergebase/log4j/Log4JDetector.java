@@ -35,6 +35,11 @@ public class Log4JDetector {
     private static boolean verbose = false;
     private static boolean debug = false;
     private static boolean foundHits = false;
+    private static boolean nagiosOutput = false;
+
+    private static PrintStream out = System.out;
+
+    private static List<Finding> findings;
 
     public static void main(String[] args) throws Exception {
         List<String> argsList = new ArrayList<>(Arrays.asList(args));
@@ -47,40 +52,69 @@ public class Log4JDetector {
             } else if ("--verbose".equals(argOrig)) {
                 verbose = true;
                 it.remove();
+            } else if("--nagios".equals(argOrig)) {
+                nagiosOutput = true;
+                findings = new ArrayList<>();
+                out = new PrintStream(new OutputStream() {
+                    @Override
+                    public void write(int b) throws IOException {
+                        // noop
+                    }
+                });
+                it.remove();
             } else {
                 File f = new File(argOrig);
                 if (!f.exists()) {
-                    System.out.println("Invalid file: [" + f.getPath() + "]");
+                    out.println("Invalid file: [" + f.getPath() + "]");
                     System.exit(102);
                 }
             }
         }
 
         if (argsList.isEmpty()) {
-            System.out.println();
-            System.out.println("Usage: java -jar log4j-detector-2021.12.14.jar [--verbose] [paths to scan...]");
-            System.out.println();
-            System.out.println("Exit codes:  0 = No vulnerable Log4J versions found.");
-            System.out.println("             2 = At least one vulnerable Log4J version found.");
-            System.out.println();
-            System.out.println("About - MergeBase log4j detector (version 2021.12.14)");
-            System.out.println("Docs  - https://github.com/mergebase/log4j-detector ");
-            System.out.println("(C) Copyright 2021 Mergebase Software Inc. Licensed to you via GPLv3.");
-            System.out.println();
+            out.println();
+            out.println("Usage: java -jar log4j-detector-2021.12.14.jar [--verbose] [paths to scan...]");
+            out.println();
+            out.println("Exit codes:  0 = No vulnerable Log4J versions found.");
+            out.println("             2 = At least one vulnerable Log4J version found.");
+            out.println();
+            out.println("About - MergeBase log4j detector (version 2021.12.14)");
+            out.println("Docs  - https://github.com/mergebase/log4j-detector ");
+            out.println("(C) Copyright 2021 Mergebase Software Inc. Licensed to you via GPLv3.");
+            out.println();
             System.exit(100);
         }
 
-        System.out.println("-- Analyzing paths (could take a long time).");
-        System.out.println("-- Note: specify the '--verbose' flag to have every file examined printed to STDERR.");
+        out.println("-- Analyzing paths (could take a long time).");
+        out.println("-- Note: specify the '--verbose' flag to have every file examined printed to STDERR.");
         for (String arg : argsList) {
             File dir = new File(arg);
             analyze(dir);
         }
-        if (foundHits) {
-            System.exit(2);
+
+        if(nagiosOutput) {
+            if (foundHits || (findings != null && !findings.isEmpty())) {
+                StringBuilder sb = new StringBuilder();
+                sb.append("CRITICAL: Found vulnerable Log4j Versions!\n");
+                if(null != findings) {
+                    for (Finding finding : findings) {
+                        sb.append("\n\t").append(finding.isVulnerable ? "VULNERABLE\t" : "SAFE      \t").append(finding.version).append("\t").append(finding.path);
+                    }
+                    sb.append("|'findings'=").append(findings.size()).append(";0;0;0");
+                }
+                System.out.println(sb.toString());
+                System.exit(2);
+            } else {
+                System.out.println("OK: No vulnerable Log4J Version found.|'findings'=0;0;0;0");
+                System.exit(0);
+            }
         } else {
-            System.out.println("-- No vulnerable Log4J 2.x samples found in supplied paths: " + argsList);
-            System.out.println("-- Congratulations, the supplied paths are not vulnerable to CVE-2021-44228 !  :-) ");
+            if (foundHits) {
+                System.exit(2);
+            } else {
+                out.println("-- No vulnerable Log4J 2.x samples found in supplied paths: " + argsList);
+                out.println("-- Congratulations, the supplied paths are not vulnerable to CVE-2021-44228 !  :-) ");
+            }
         }
     }
 
@@ -157,7 +191,7 @@ public class Log4JDetector {
         try {
             zin = zipper.getFreshZipStream();
         } catch (Exception e) {
-            System.out.println("-- Problem: " + zipPath + " - " + e);
+            out.println("-- Problem: " + zipPath + " - " + e);
             if (verbose) {
                 System.err.println("-- Problem: " + zipPath + " - " + e);
                 e.printStackTrace(System.err);
@@ -166,7 +200,7 @@ public class Log4JDetector {
         }
         if (zin == null) {
             if (fileType(zipPath) == 0) {
-                System.out.println("-- Problem: " + zipPath + " - Not actually a zip!?! (no magic number)");
+                out.println("-- Problem: " + zipPath + " - Not actually a zip!?! (no magic number)");
                 if (verbose) {
                     System.err.println("-- Problem: " + zipPath + " - Not actually a zip!?! (no magic number)");
                 }
@@ -197,7 +231,7 @@ public class Log4JDetector {
             try {
                 ze = zin.getNextEntry();
             } catch (Exception oops) {
-                System.out.println("-- Problem " + zipPath + " - " + oops);
+                out.println("-- Problem " + zipPath + " - " + oops);
                 if (verbose) {
                     System.err.println("-- Problem: " + zipPath + " - " + oops);
                     oops.printStackTrace(System.err);
@@ -237,7 +271,7 @@ public class Log4JDetector {
                 try {
                     b = Bytes.streamToBytes(zin, false, zipEntrySize);
                 } catch (Exception e) {
-                    System.out.println("-- Problem - could not extract " + fullPath + " (size=" + zipEntrySize + ") - " + e);
+                    out.println("-- Problem - could not extract " + fullPath + " (size=" + zipEntrySize + ") - " + e);
                     if (verbose) {
                         System.err.println("-- Problem - could not extract " + fullPath + " (size=" + zipEntrySize + ") - " + e);
                         e.printStackTrace(System.err);
@@ -274,8 +308,8 @@ public class Log4JDetector {
 
                     findLog4jRecursive(fullPath, recursiveZipper);
                 } catch (Exception e) {
-                    System.out.println(fullPath + " FAILED: " + e);
-                    e.printStackTrace(System.out);
+                    out.println(fullPath + " FAILED: " + e);
+                    e.printStackTrace(out);
                 }
 
 
@@ -332,6 +366,9 @@ public class Log4JDetector {
                 }
             }
 
+            final Finding finding = new Finding();
+            finding.path = zipPath;
+
             StringBuilder buf = new StringBuilder();
             if (isLog4j) {
                 buf.append(zipPath).append(" contains Log4J-2.x   ");
@@ -340,22 +377,32 @@ public class Log4JDetector {
                         if (isSafe) {
                             if (isLog4j_2_12_2) {
                                 buf.append(">= 2.12.2 _SAFE_ :-)");
+                                finding.version = ">= 2.12.2";
                             } else {
                                 buf.append(">= 2.15.0 _SAFE_ :-)");
+                                finding.version = ">= 2.15.0";
                             }
                         } else {
                             buf.append(">= 2.10.0 _VULNERABLE_ :-(");
+                            finding.version = ">= 2.10.0";
                         }
                     } else {
                         buf.append(">= 2.0-beta9 (< 2.10.0) _VULNERABLE_ :-(");
+                        finding.version = ">= 2.0-beta9";
                     }
                 } else {
                     buf.append("<= 2.0-beta8 _POTENTIALLY_SAFE_ :-| (or did you already remove JndiLookup.class?) ");
+                    finding.version = "<= 2.0-beta8";
                 }
                 if (!isSafe) {
                     foundHits = true;
+                    finding.isVulnerable = true;
                 }
-                System.out.println(buf);
+                if(nagiosOutput) {
+                    findings.add(finding);
+                } else {
+                    out.println(buf);
+                }
             }
         }
 
@@ -369,7 +416,7 @@ public class Log4JDetector {
                     byte[] bytes = Bytes.streamToBytes(fin);
                     containsMatch(bytes);
                 } catch (IOException ioe) {
-                    // System.out.println("FAILED TO READ " + zipPath + ": " + ioe);
+                    // out.println("FAILED TO READ " + zipPath + ": " + ioe);
                 } finally {
                     if (fin != null) {
                         try {
@@ -382,6 +429,12 @@ public class Log4JDetector {
             }
         }
          */
+    }
+
+    private static class Finding {
+        boolean isVulnerable = false;
+        String version;
+        String path;
     }
 
     private static boolean containsMatch(byte[] bytes, byte[] needle) {
@@ -436,8 +489,8 @@ public class Log4JDetector {
             String zip = zipFile.getPath();
             findLog4jRecursive(zip, myZipper);
         } catch (Exception e) {
-            System.out.println(zipFile.getPath() + " FAILED: " + e);
-            e.printStackTrace(System.out);
+            out.println(zipFile.getPath() + " FAILED: " + e);
+            e.printStackTrace(out);
         } finally {
             myZipper.close();
         }

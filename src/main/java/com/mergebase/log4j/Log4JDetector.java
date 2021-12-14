@@ -52,7 +52,7 @@ public class Log4JDetector {
             } else if ("--verbose".equals(argOrig)) {
                 verbose = true;
                 it.remove();
-            } else if("--nagios".equals(argOrig)) {
+            } else if ("--nagios".equals(argOrig)) {
                 nagiosOutput = true;
                 findings = new ArrayList<>();
                 out = new PrintStream(new OutputStream() {
@@ -92,18 +92,28 @@ public class Log4JDetector {
             analyze(dir);
         }
 
-        if(nagiosOutput) {
+        if (nagiosOutput) {
             if (foundHits || (findings != null && !findings.isEmpty())) {
-                StringBuilder sb = new StringBuilder();
-                sb.append("CRITICAL: Found vulnerable Log4j Versions!\n");
-                if(null != findings) {
+                final String envValue = String.valueOf(System.getenv("LOG4J_FORMAT_MSG_NO_LOOKUPS"));
+
+                final boolean disabledViaEnv = "true".equals(envValue); // TODO: @Bernhard: Case in-sensitive check?
+                final boolean vulnerableFinding = findings.stream().anyMatch(e -> e.isVulnerable);
+
+                final Status status = vulnerableFinding ? (disabledViaEnv ? Status.WARNING : Status.CRITICAL) : Status.OK;
+
+                final StringBuilder sb = new StringBuilder();
+                sb.append(status.name());
+
+                sb.append(": Found ").append(findings.size()).append(" log4j jar(s): ").append(findings.stream().filter(e -> e.isVulnerable).count()).append(" affected by CVE-2021-44228");
+                        sb.append(" (mitigation via ENV LOG4J_FORMAT_MSG_NO_LOOKUPS: ").append(envValue).append(")\n");
+                if (null != findings) {
                     for (Finding finding : findings) {
-                        sb.append("\n\t").append(finding.isVulnerable ? "VULNERABLE\t" : "SAFE      \t").append(finding.version).append("\t").append(finding.path);
+                        sb.append("\n").append(finding.isVulnerable ? "VULNERABLE\t" : "SAFE      \t").append(finding.version).append("\t").append(String.valueOf(finding.path).replace("\\", "/"));
                     }
                     sb.append("|'findings'=").append(findings.size()).append(";0;0;0");
                 }
-                System.out.println(sb.toString());
-                System.exit(2);
+                System.out.println(sb);
+                System.exit(status.retCode);
             } else {
                 System.out.println("OK: No vulnerable Log4J Version found.|'findings'=0;0;0;0");
                 System.exit(0);
@@ -398,7 +408,7 @@ public class Log4JDetector {
                     foundHits = true;
                     finding.isVulnerable = true;
                 }
-                if(nagiosOutput) {
+                if (nagiosOutput) {
                     findings.add(finding);
                 } else {
                     out.println(buf);
@@ -437,6 +447,15 @@ public class Log4JDetector {
         String path;
     }
 
+    private static enum Status {
+        OK(0), WARNING(1), CRITICAL(2), UNKNOWN(3);
+
+        final int retCode;
+        Status(int retCode) {
+            this.retCode = retCode;
+        }
+    }
+
     private static boolean containsMatch(byte[] bytes, byte[] needle) {
         int matched = Bytes.kmp(bytes, needle);
         return matched >= 0;
@@ -452,11 +471,11 @@ public class Log4JDetector {
                 try {
                     fin = new PushbackInputStream(new FileInputStream(zipFile), 4);
                     byte[] magic = pop4(fin);
-                    if(!isZipSentinel(magic)) {
+                    if (!isZipSentinel(magic)) {
                         fin.close();
                         return null;
                     }
-                    ((PushbackInputStream)fin).unread(magic);
+                    ((PushbackInputStream) fin).unread(magic);
 
                     int pos = getZipStart(fin);
                     if (pos < 0) {

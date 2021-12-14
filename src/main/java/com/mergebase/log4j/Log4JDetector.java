@@ -1,10 +1,6 @@
 package com.mergebase.log4j;
 
-import java.io.ByteArrayInputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -88,24 +84,21 @@ public class Log4JDetector {
         }
     }
 
-    private static int[] pop4(InputStream in) throws IOException {
-        int[] four = new int[4];
-        four[0] = in.read();
-        four[1] = in.read();
-        four[2] = in.read();
-        four[3] = in.read();
-        return four;
+    private static byte[] pop4(InputStream in) throws IOException {
+        byte[] buffer = new byte[4];
+        in.read(buffer);
+        return buffer;
     }
 
-    private static int nextByte(int[] four, InputStream in) throws IOException {
+    private static byte nextByte(byte[] four, InputStream in) throws IOException {
         four[0] = four[1];
         four[1] = four[2];
         four[2] = four[3];
-        four[3] = in.read();
+        four[3] = (byte) in.read();
         return four[3];
     }
 
-    private static boolean isZipSentinel(int[] four) {
+    private static boolean isZipSentinel(byte[] four) {
         return four[0] == 0x50 && four[1] == 0x4B && four[2] == 3 && four[3] == 4;
     }
 
@@ -396,17 +389,22 @@ public class Log4JDetector {
         return matched >= 0;
     }
 
-    public static void scan(
-            final File zipFile
-    ) {
+    public static void scan(final File zipFile) {
         Zipper myZipper = new Zipper() {
-            private FileInputStream fin;
+            private InputStream fin;
             private ZipInputStream zin;
 
             public ZipInputStream getFreshZipStream() {
                 Util.close(zin, fin);
                 try {
-                    fin = new FileInputStream(zipFile);
+                    fin = new PushbackInputStream(new FileInputStream(zipFile), 4);
+                    byte[] magic = pop4(fin);
+                    if(!isZipSentinel(magic)) {
+                        fin.close();
+                        return null;
+                    }
+                    ((PushbackInputStream)fin).unread(magic);
+
                     int pos = getZipStart(fin);
                     if (pos < 0) {
                         fin.close();
@@ -448,7 +446,7 @@ public class Log4JDetector {
     private static int getZipStart(InputStream in) {
         int pos = -1;
         try {
-            int[] fourBytes = pop4(in);
+            byte[] fourBytes = pop4(in);
             pos = 0;
             if (!isZipSentinel(fourBytes)) {
                 int read = nextByte(fourBytes, in);
